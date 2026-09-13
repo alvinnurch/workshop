@@ -71,24 +71,11 @@
       <div style="padding:min(8vw,64px) min(6vw,52px);display:flex;flex-direction:column;justify-content:center;background:#FFFFFF">
         <div style="width:100%;max-width:420px">
           <h2 style="font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-size:24px;margin:0 0 6px;font-weight:700;letter-spacing:-.01em">Masuk sebagai peserta</h2>
-          <p style="font-size:13.5px;color:#7A6F66;margin:0 0 24px;line-height:1.55">Gunakan nama, kode, dan kelompok yang dibagikan panitia.</p>
+          <p style="font-size:13.5px;color:#7A6F66;margin:0 0 24px;line-height:1.55">Masukkan kode peserta yang dibagikan panitia.</p>
           <div style="display:grid;gap:16px">
             <label style="display:grid;gap:6px">
-              <span style="font-size:12px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#5C534B">Nama lengkap</span>
-              <input value="{{ formName }}" onChange="{{ onName }}" placeholder="Nama sesuai daftar peserta" style="border:1px solid #DCD3C8;border-radius:9px;padding:12px 14px;font-size:15px;background:#FCFAF7;color:#1B1714;outline:none" style-focus="border-color:#A5121C;background:#FFF" />
-            </label>
-            <label style="display:grid;gap:6px">
               <span style="font-size:12px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#5C534B">Kode peserta</span>
-              <input value="{{ formCode }}" onChange="{{ onCode }}" placeholder="Contoh: WS-4821" style="border:1px solid #DCD3C8;border-radius:9px;padding:12px 14px;font-size:15px;background:#FCFAF7;letter-spacing:.14em;font-weight:600;text-transform:uppercase;color:#1B1714;outline:none" style-focus="border-color:#A5121C;background:#FFF" />
-            </label>
-            <label style="display:grid;gap:6px">
-              <span style="font-size:12px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#5C534B">Kelompok</span>
-              <select value="{{ formGroup }}" onChange="{{ onGroup }}" style="border:1px solid #DCD3C8;border-radius:9px;padding:12px 14px;font-size:15px;background:#FCFAF7;color:#1B1714;outline:none" style-focus="border-color:#A5121C;background:#FFF">
-                <option value="">Pilih kelompok</option>
-                <sc-for list="{{ groups }}" as="g" hint-placeholder-count="4">
-                  <option value="{{ g }}">{{ g }}</option>
-                </sc-for>
-              </select>
+              <input value="{{ formCode }}" onChange="{{ onCode }}" onKeyDown="{{ onCodeKey }}" placeholder="Contoh: WS-4821" style="border:1px solid #DCD3C8;border-radius:9px;padding:14px;font-size:19px;background:#FCFAF7;letter-spacing:.18em;font-weight:700;text-transform:uppercase;text-align:center;color:#1B1714;outline:none" style-focus="border-color:#A5121C;background:#FFF" />
             </label>
             <sc-if value="{{ loginError }}" hint-placeholder-val="{{ false }}">
               <div style="background:#FCEDEE;border:1px solid #F0C9CC;color:#8E1018;border-radius:9px;padding:11px 13px;font-size:13.5px;line-height:1.5">{{ loginError }}</div>
@@ -1232,7 +1219,7 @@ class Component extends DCLogic {
   state = {
     db: this.bootDb(), adminSessionId: null, narrow: typeof window !== 'undefined' && window.innerWidth < 820,
     sideOpen: false, role: 'login', panel: null, projFrom: 'login', projPick: null,
-    formName: '', formCode: '', formGroup: '', loginError: '',
+    formCode: '', loginError: '',
     adminPin: '', adminError: '', tab: 'control',
     adminSessionId: null, editBlock: null, expandResult: null,
     draft: {}, formDraft: {}, formError: '', formSent: false,
@@ -1243,7 +1230,18 @@ class Component extends DCLogic {
   };
 
   api() { return (typeof window !== 'undefined' && window.WORKSHOP_API) || ''; }
+  typing() {
+    if (this.state.role !== 'admin') return false;
+    if (Date.now() - (this._typedAt || 0) < 2000) return true;
+    const el = typeof document !== 'undefined' && document.activeElement;
+    return !!(el && /^(INPUT|TEXTAREA)$/.test(el.tagName) && el.type !== 'file');
+  }
+  noteTyping(e) {
+    this._typedAt = Date.now();
+    return e;
+  }
   async apiGet() {
+    if (this.typing()) return;
     const res = await fetch(this.api() + '?action=db', { method: 'GET' });
     const out = await res.json();
     if (out && out.ok && out.data && out.data.sessions) {
@@ -1270,9 +1268,7 @@ class Component extends DCLogic {
     }
   }
   async apiPush(db) {
-    const out = await this.apiPost({ action: 'putDb', password: this._pw || '', db });
-    await this.apiGet().catch(() => {});
-    return out;
+    return this.apiPost({ action: 'putDb', password: this._pw || '', db });
   }
   componentDidMount() {
     this._resize = () => {
@@ -1395,7 +1391,8 @@ class Component extends DCLogic {
         if (apiPayload) {
           this._pushT = setTimeout(() => { this._busy = false; this.apiPost(apiPayload); }, 150);
         } else if (this.state.role === 'admin') {
-          this._pushT = setTimeout(() => { this._busy = false; this.apiPush(this.state.db); }, 600);
+          const delay = this.typing() ? 1200 : 120;
+          this._pushT = setTimeout(() => { this._busy = false; this.apiPush(this.state.db); }, delay);
         } else {
           this._busy = false;
         }
@@ -1405,7 +1402,16 @@ class Component extends DCLogic {
       return { db };
     });
   }
-  code(n) { return 'WS-' + String(1000 + ((n * 733) % 8999)); }
+  code(taken) {
+    const used = new Set((taken || []).map(c => String(c).trim().toUpperCase()));
+    const AB = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    for (let i = 0; i < 500; i++) {
+      let c = 'WS-';
+      for (let k = 0; k < 5; k++) c += AB[Math.floor(Math.random() * AB.length)];
+      if (!used.has(c)) return c;
+    }
+    return 'WS-' + Date.now().toString(36).toUpperCase().slice(-5);
+  }
   uid(p) { return p + Math.random().toString(36).slice(2, 7); }
 
   qz(text, options, answer) { return { id: this.uid('q'), text, options, answer }; }
@@ -1549,17 +1555,15 @@ class Component extends DCLogic {
     const st = this.state, db = st.db;
     const v = {
       groups: this.GROUPS,
-      formName: st.formName, formCode: st.formCode, formGroup: st.formGroup, loginError: st.loginError,
+      formCode: st.formCode, loginError: st.loginError,
       adminPin: st.adminPin, adminError: st.adminError,
-      onName: e => this.setState({ formName: e.target.value, loginError: '' }),
       onCode: e => this.setState({ formCode: e.target.value.toUpperCase(), loginError: '' }),
-      onGroup: e => this.setState({ formGroup: e.target.value, loginError: '' }),
       onAdminPin: e => this.setState({ adminPin: e.target.value, adminError: '' }),
       goAdmin: () => this.setState({ role: 'adminLogin', adminError: '' }),
       goProjector: () => this.setState({ role: 'projector', projFrom: st.role, projPick: null }),
       projBack: () => this.setState({ role: st.projFrom === 'admin' ? 'admin' : 'login', projPick: null }),
       projBackLabel: st.projFrom === 'admin' ? 'Kembali ke panel admin' : 'Kembali ke halaman depan',
-      logout: () => this.setState({ role: 'login', userId: null, panel: null, formCode: '', formName: '', formGroup: '', adminPin: '' }),
+      logout: () => this.setState({ role: 'login', userId: null, panel: null, formCode: '', adminPin: '' }),
       isLogin: st.role === 'login', isPeserta: st.role === 'peserta', isProjector: st.role === 'projector',
       isAdmin: st.role === 'admin', isAdminLogin: st.role === 'adminLogin', isLoggedIn: st.role === 'peserta' || st.role === 'admin',
       totalParticipants: db.participants.length,
@@ -1595,15 +1599,16 @@ class Component extends DCLogic {
       : [{ label: 'Status', value: live ? 'Detail sesi belum diisi panitia' : 'Menunggu jadwal' }];
     v.hasSessionDesc = !!(live && String(live.desc || '').trim());
 
-    v.doLogin = () => {
-      const name = st.formName.trim().toLowerCase(), code = st.formCode.trim().toUpperCase();
-      if (!name || !code || !st.formGroup) return this.setState({ loginError: 'Lengkapi nama, kode, dan kelompok.' });
-      const p = db.participants.find(x => x.code === code);
-      if (!p) return this.setState({ loginError: 'Kode peserta tidak dikenali.' });
-      if (p.name.toLowerCase() !== name) return this.setState({ loginError: 'Nama tidak sesuai dengan kode tersebut.' });
-      if (p.group !== st.formGroup) return this.setState({ loginError: 'Kelompok tidak sesuai dengan data panitia.' });
-      this.setState({ role: 'peserta', userId: p.id, loginError: '', panel: null });
+    const tryLogin = () => {
+      const code = st.formCode.trim().toUpperCase();
+      if (!code) return this.setState({ loginError: 'Masukkan kode peserta Anda.' });
+      const hits = db.participants.filter(x => String(x.code).trim().toUpperCase() === code);
+      if (!hits.length) return this.setState({ loginError: 'Kode peserta tidak dikenali. Periksa kembali atau tanyakan ke panitia.' });
+      if (hits.length > 1) return this.setState({ loginError: 'Kode ini terdaftar lebih dari sekali. Hubungi panitia.' });
+      this.setState({ role: 'peserta', userId: hits[0].id, loginError: '', panel: null });
     };
+    v.doLogin = tryLogin;
+    v.onCodeKey = e => { if (e.key === 'Enter') tryLogin(); };
 
     /* ── PESERTA ── */
     const me = st.userId ? db.participants.find(p => p.id === st.userId) : null;
@@ -2006,7 +2011,7 @@ class Component extends DCLogic {
 
     if (cur) {
       const R = this.resp(cur.id);
-      const setS = (k) => e => { const val = e.target.value; this.save(d => { d.sessions.find(s => s.id === cur.id)[k] = val; }); };
+      const setS = (k) => e => { const val = e.target.value; this._typedAt = Date.now(); this.save(d => { d.sessions.find(s => s.id === cur.id)[k] = val; }); };
       v.resultSubtitle = [cur.title, String(cur.time || '').trim()].filter(Boolean).join(' · ');
       v.sTitle = cur.title; v.sDesc = cur.desc; v.sSpeaker = cur.speaker; v.sTime = cur.time; v.sVenue = cur.venue; v.sMode = cur.mode;
       v.onSTitle = setS('title'); v.onSDesc = setS('desc'); v.onSSpeaker = setS('speaker'); v.onSTime = setS('time'); v.onSVenue = setS('venue'); v.onSMode = setS('mode');
@@ -2060,14 +2065,14 @@ class Component extends DCLogic {
           openBtnStyle: { background: b.open ? '#F6F1EA' : '#A5121C', border: b.open ? '1px solid #E0D8CE' : 'none', color: b.open ? '#5C534B' : '#FFF', borderRadius: '8px', padding: '8px 12px', fontSize: '12.5px', fontWeight: 700, opacity: b.enabled ? 1 : 0.4 },
           toggleOpen: () => { if (!b.enabled) return; mut(b.id, (x, s) => { x.open = !x.open; s.active = x.open ? x.id : null; }); },
           remove: () => { this.setState({ editBlock: null }); this.save(d => { const s = d.sessions.find(x => x.id === cur.id); s.blocks = s.blocks.filter(x => x.id !== b.id); if (s.active === b.id) s.active = null; }); },
-          onTitle: e => { const val = e.target.value; mut(b.id, x => { x.title = val; }); },
-          onDesc: e => { const val = e.target.value; mut(b.id, x => { x.desc = val; }); },
-          onPresenter: e => { const val = e.target.value; mut(b.id, x => { x.presenter = val; }); },
-          onUrl: e => { const val = e.target.value; mut(b.id, x => { x.url = val; }); },
-          onFileName: e => { const val = e.target.value; mut(b.id, x => { x.fileName = val; }); },
-          onMeetingId: e => { const val = e.target.value; mut(b.id, x => { x.meetingId = val; }); },
-          onPasscode: e => { const val = e.target.value; mut(b.id, x => { x.passcode = val; }); },
-          onPrompt: e => { const val = e.target.value; mut(b.id, x => { x.prompt = val; }); },
+          onTitle: e => { const val = e.target.value; this._typedAt = Date.now(); mut(b.id, x => { x.title = val; }); },
+          onDesc: e => { const val = e.target.value; this._typedAt = Date.now(); mut(b.id, x => { x.desc = val; }); },
+          onPresenter: e => { const val = e.target.value; this._typedAt = Date.now(); mut(b.id, x => { x.presenter = val; }); },
+          onUrl: e => { const val = e.target.value; this._typedAt = Date.now(); mut(b.id, x => { x.url = val; }); },
+          onFileName: e => { const val = e.target.value; this._typedAt = Date.now(); mut(b.id, x => { x.fileName = val; }); },
+          onMeetingId: e => { const val = e.target.value; this._typedAt = Date.now(); mut(b.id, x => { x.meetingId = val; }); },
+          onPasscode: e => { const val = e.target.value; this._typedAt = Date.now(); mut(b.id, x => { x.passcode = val; }); },
+          onPrompt: e => { const val = e.target.value; this._typedAt = Date.now(); mut(b.id, x => { x.prompt = val; }); },
           isPpt: b.type === 'ppt', isZoom: b.type === 'zoom', isQuiz: b.type === 'quiz', isCloud: b.type === 'wordcloud', isForm: b.type === 'form', isCheckin: b.type === 'checkin',
           token: b.token || '',
           onToken: e => { const val = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6); mut(b.id, x => { x.token = val; }); },
@@ -2109,11 +2114,11 @@ class Component extends DCLogic {
           questions: (b.questions || []).map((q, qi) => ({
             num: String(qi + 1).padStart(2, '0'), text: q.text,
             answerLetter: this.LETTERS[q.answer] || 'A',
-            onText: e => { const val = e.target.value; mut(b.id, x => { x.questions[qi].text = val; }); },
+            onText: e => { const val = e.target.value; this._typedAt = Date.now(); mut(b.id, x => { x.questions[qi].text = val; }); },
             remove: () => mut(b.id, x => { x.questions.splice(qi, 1); }),
             options: q.options.map((o, oi) => ({
               letter: this.LETTERS[oi], text: o,
-              onText: e => { const val = e.target.value; mut(b.id, x => { x.questions[qi].options[oi] = val; }); },
+              onText: e => { const val = e.target.value; this._typedAt = Date.now(); mut(b.id, x => { x.questions[qi].options[oi] = val; }); },
               setAnswer: () => mut(b.id, x => { x.questions[qi].answer = oi; }),
               markStyle: { width: '30px', height: '30px', flex: 'none', borderRadius: '50%', border: '1px solid ' + (q.answer === oi ? '#3E6B22' : '#DCD3C8'), background: q.answer === oi ? '#3E6B22' : '#FFF', color: q.answer === oi ? '#FFF' : '#8C8078', fontSize: '12.5px', fontWeight: 700 }
             }))
@@ -2122,9 +2127,9 @@ class Component extends DCLogic {
           addField: () => mut(b.id, x => { x.fields.push({ id: this.uid('f'), label: 'Isian baru', type: 'short', required: false, options: [] }); }),
           fields: (b.fields || []).map((f, fi) => ({
             label: f.label, type: f.type, isChoice: f.type === 'choice', optionText: (f.options || []).join(', '),
-            onLabel: e => { const val = e.target.value; mut(b.id, x => { x.fields[fi].label = val; }); },
+            onLabel: e => { const val = e.target.value; this._typedAt = Date.now(); mut(b.id, x => { x.fields[fi].label = val; }); },
             onType: e => { const val = e.target.value; mut(b.id, x => { x.fields[fi].type = val; if (val === 'choice' && !x.fields[fi].options.length) x.fields[fi].options = ['Pilihan 1', 'Pilihan 2']; }); },
-            onOptions: e => { const val = e.target.value; mut(b.id, x => { x.fields[fi].options = val.split(',').map(s => s.trim()).filter(Boolean); }); },
+            onOptions: e => { const val = e.target.value; this._typedAt = Date.now(); mut(b.id, x => { x.fields[fi].options = val.split(',').map(s => s.trim()).filter(Boolean); }); },
             toggleReq: () => mut(b.id, x => { x.fields[fi].required = !x.fields[fi].required; }),
             reqLabel: f.required ? 'Wajib' : 'Opsional',
             reqStyle: { background: f.required ? '#FBEFEF' : '#FFF', border: '1px solid ' + (f.required ? '#F0C9CC' : '#E0D8CE'), color: f.required ? '#A5121C' : '#8C8078', borderRadius: '7px', padding: '8px 10px', fontSize: '11.5px', fontWeight: 700 },
@@ -2273,7 +2278,7 @@ class Component extends DCLogic {
       const name = st.newName.trim();
       if (!name) return;
       this.save(d => {
-        d.participants.push({ id: this.uid('p'), name, code: this.code(d.participants.length + 7), group: st.newGroup, org: st.newOrg.trim(), phone: st.newPhone.trim(), email: st.newEmail.trim() });
+        d.participants.push({ id: this.uid('p'), name, code: this.code(d.participants.map(p => p.code)), group: st.newGroup, org: st.newOrg.trim(), phone: st.newPhone.trim(), email: st.newEmail.trim() });
       });
       this.setState({ newName: '', newOrg: '', newPhone: '', newEmail: '' });
     };
