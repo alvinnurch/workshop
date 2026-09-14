@@ -620,6 +620,7 @@
         </div>
         <sc-if value="{{ showSaveNow }}" hint-placeholder-val="{{ false }}">
           <button onClick="{{ saveNow }}" style="{{ saveNowStyle }}">{{ saveNowLabel }}</button>
+          <button onClick="{{ reloadNow }}" style="background:#FFF;border:1px solid #E0D8CE;color:#5C534B;border-radius:100px;padding:7px 14px;font-size:12px;font-weight:600;margin-bottom:6px" style-hover="background:#F6F1EA">{{ reloadLabel }}</button>
         </sc-if>
       </div>
       <sc-if value="{{ isDemoMode }}" hint-placeholder-val="{{ false }}">
@@ -1274,6 +1275,7 @@ class Component extends DCLogic {
     cloudInput: '', fbPick: '', fbNote: '', fbSent: false,
     scanning: false, checkinCode: '', checkinError: '', apiError: '',
     draftPending: false, draftSaving: false,
+    reloading: false, reloadAsk: 0,
     filterGroup: '', newName: '', newGroup: 'Kelompok A', newOrg: '', newPhone: '', newEmail: '',
     userId: null
   };
@@ -1419,6 +1421,10 @@ class Component extends DCLogic {
       const loop = () => {
         const wait = this.runOf() ? 2500 : 5000;
         this._poll = setTimeout(() => {
+          const st = this.state;
+          const editing = (st.role === 'admin' || st.role === 'adminLogin') &&
+            (this._dirty || st.draftPending || st.tab === 'control');
+          if (editing) return loop();
           if (this._busy || (typeof document !== 'undefined' && document.hidden)) return loop();
           this.apiGet().catch(() => {}).then(loop, loop);
         }, wait);
@@ -2453,6 +2459,18 @@ class Component extends DCLogic {
     v.saveNowLabel = st.draftSaving ? 'Menyimpan…' : drafting ? 'Simpan perubahan' : 'Tersimpan';
     v.saveNowStyle = { background: drafting ? '#A5121C' : '#F1EBE3', color: drafting ? '#FFF' : '#8C8078', border: 'none', borderRadius: '100px', padding: '7px 16px', fontSize: '12px', fontWeight: 700, marginBottom: '6px', cursor: drafting ? 'pointer' : 'default' };
     v.saveNow = () => { if (st.draftPending && !st.draftSaving) this.flushDraft(); };
+    const askReload = st.reloadAsk && Date.now() - st.reloadAsk < 6000;
+    v.reloadLabel = st.reloading ? 'Memuat…' : askReload ? 'Buang perubahan & muat ulang?' : 'Muat ulang';
+    v.reloadNow = async () => {
+      if (st.reloading) return;
+      if (st.draftPending && !askReload) return this.setState({ reloadAsk: Date.now() });
+      this.setState({ reloadAsk: 0 });
+      this._dirty = false; this._draftDb = null;
+      try { localStorage.removeItem(this.KEY + '_draft'); } catch (e) {}
+      this.setState({ reloading: true, draftPending: false, apiError: '' });
+      try { await this.apiGet(true); } catch (e) {}
+      this.setState({ reloading: false });
+    };
 
     const cur = this.sess(st.adminSessionId) || db.sessions[0] || null;
     v.adminSessionId = cur ? cur.id : '';
