@@ -1298,20 +1298,72 @@ class Component extends DCLogic {
   }
   async flushDraft() {
     clearTimeout(this._draftT);
-    if (!this._dirty) return;
-    this._dirty = false;
-    this.setState({ draftPending: false, draftSaving: true });
-    clearTimeout(this._pushT); this._pushT = null; this._busy = false;
-    try { if (this.api()) await this.apiPush(this.state.db); } finally {
-      try { localStorage.removeItem(this.KEY + '_draft'); } catch (e) {}
-      this.setState({ draftSaving: false });
+    if (!this._dirty || this.state.draftSaving) return;
+    clearTimeout(this._pushT); this._pushT = null;
+    if (!this.api()) { this._dirty = false; return this.setState({ draftPending: false }); }
+    this._busy = true;
+    this._staleBefore = (this._reqSeq = (this._reqSeq || 0) + 1);
+    try { if (this._pollAbort) this._pollAbort.abort(); } catch (e) {}
+    this.setState({ draftSaving: true, apiError: '' });
+    const snapshot = this.state.db;
+    let ok = null;
+    try { ok = await this.apiPush(snapshot); } catch (e) { ok = null; }
+    if (ok && ok.ok !== false) {
+      /* Pastikan spreadsheet benar-benar memuat susunan yang sama sebelum draf dibuang. */
+      let verified = false;
+      for (let i = 0; i < 4 && !verified; i++) {
+        try {
+          const seq = (this._reqSeq = (this._reqSeq || 0) + 1);
+          const res = await this.fetchT(this.api() + '?action=db', { method: 'GET' }, 20000);
+          const out = await res.json();
+          verified = !!(out && out.ok && out.data && this.fingerprint(out.data) === this.fingerprint(snapshot));
+          if (verified) this._staleBefore = seq - 1;
+        } catch (e) { verified = false; }
+        if (!verified) await new Promise(r => setTimeout(r, 1600 + i * 900));
+      }
+      if (verified) {
+        this._dirty = false; this._draftDb = null;
+        try { localStorage.removeItem(this.KEY + '_draft'); } catch (e) {}
+        this.setState({ draftPending: false, draftSaving: false, syncAt: Date.now() });
+      } else {
+        /* Kiriman sudah diterima server; buang draf agar pemuatan berikutnya memakai data spreadsheet. */
+        this._dirty = false; this._draftDb = null;
+        try { localStorage.removeItem(this.KEY + '_draft'); } catch (e) {}
+        this.setState({ draftPending: false, draftSaving: false, syncAt: Date.now(), apiError: 'Perubahan sudah dikirim, tetapi belum dapat dipastikan terbaca ulang dari spreadsheet. Segarkan halaman beberapa saat lagi untuk memeriksa.' });
+      }
+    } else {
+      this.setState({ draftSaving: false, draftPending: true, apiError: this.state.apiError || 'Gagal menyimpan. Perubahan Anda masih tersimpan di peramban — coba tekan Simpan lagi.' });
     }
+    this._busy = false;
   }
-  async apiGet() {
-    if (this.typing() || this._pushing || this._pushT) return;
-    const res = await fetch(this.api() + '?action=db', { method: 'GET' });
+  /* Sidik jari susunan (bukan jawaban peserta) untuk memastikan simpanan benar-benar mendarat. */
+  fingerprint(db) {
+    try {
+      const txt = x => String(x == null ? '' : x).trim();
+      return JSON.stringify((db.sessions || []).map(s => [
+        s.id, txt(s.title),
+        (s.blocks || []).map(b => [b.id, b.type, txt(b.title), !!b.enabled,
+          (b.questions || []).length, (b.fields || []).length])
+      ])) + '|' + (db.participants || []).map(p => p.id).join(',');
+    } catch (e) { return String(Math.random()); }
+  }
+  /* fetch dengan batas waktu agar tombol tidak tersangkut di "Menyimpan…". */
+  fetchT(url, opts, ms, slot) {
+    const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    if (slot && ctrl) this[slot] = ctrl;
+    const t = setTimeout(() => { try { ctrl && ctrl.abort(); } catch (e) {} }, ms || 20000);
+    return fetch(url, Object.assign({}, opts, ctrl ? { signal: ctrl.signal } : {}))
+      .finally(() => { clearTimeout(t); if (slot && this[slot] === ctrl) this[slot] = null; });
+  }
+  async apiGet(force) {
+    if (!force && (this.typing() || this._pushing || this._pushT)) return;
+    const seq = (this._reqSeq = (this._reqSeq || 0) + 1);
+    const res = await this.fetchT(this.api() + '?action=db', { method: 'GET' }, 15000, '_pollAbort');
     const out = await res.json();
+    /* Jawaban yang dipesan sebelum penyimpanan terakhir sudah kedaluwarsa — jangan dipakai. */
+    if (seq <= (this._staleBefore || 0)) return;
     if (out && out.ok && out.data && out.data.sessions) {
+      if (this._draftDb) { this._draftDb = null; this.setState({ syncAt: Date.now() }); return; }
       this.setState(s => ({
         db: out.data, syncAt: Date.now(),
         adminSessionId: out.data.sessions.some(x => x.id === s.adminSessionId) ? s.adminSessionId : out.data.sessions[0].id
@@ -1320,17 +1372,20 @@ class Component extends DCLogic {
   }
   async apiPost(payload) {
     try {
-      const res = await fetch(this.api(), {
+      const res = await this.fetchT(this.api(), {
         method: 'POST', redirect: 'follow',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(payload)
-      });
+      }, 25000);
       const out = await res.json();
       if (out && out.ok === false) this.setState({ apiError: out.error || 'Gagal menyimpan ke spreadsheet.' });
       else this.setState({ syncAt: Date.now() });
       return out;
     } catch (e) {
-      this.setState({ apiError: 'Koneksi ke spreadsheet gagal. Periksa jaringan.' });
+      const aborted = e && e.name === 'AbortError';
+      this.setState({ apiError: aborted
+        ? 'Spreadsheet tidak menjawab dalam 25 detik. Perubahan masih tersimpan di peramban — coba Simpan lagi.'
+        : 'Koneksi ke spreadsheet gagal. Periksa jaringan.' });
       return null;
     }
   }
@@ -1357,11 +1412,18 @@ class Component extends DCLogic {
         const draft = localStorage.getItem(this.KEY + '_draft');
         if (draft) {
           const db = JSON.parse(draft);
-          if (db && db.sessions) { this._dirty = true; this.setState({ db, draftPending: true }); }
+          if (db && db.sessions) { this._draftDb = db; this._dirty = true; this.setState({ db, draftPending: true }); }
         }
       } catch (e) {}
-      this.apiGet().catch(() => {});
-      this._poll = setInterval(() => { if (!this._busy) this.apiGet().catch(() => {}); }, 3000);
+      this.apiGet(true).catch(() => {});
+      const loop = () => {
+        const wait = this.runOf() ? 2500 : 5000;
+        this._poll = setTimeout(() => {
+          if (this._busy || (typeof document !== 'undefined' && document.hidden)) return loop();
+          this.apiGet().catch(() => {}).then(loop, loop);
+        }, wait);
+      };
+      loop();
       this._tick = setInterval(() => { this.sweepRun(); if (this.runOf()) this.forceUpdate(); }, 400);
       return;
     }
@@ -1410,7 +1472,7 @@ class Component extends DCLogic {
     window.removeEventListener('beforeunload', this._leave);
     document.removeEventListener('focusout', this._blur, true);
     clearTimeout(this._draftT);
-    clearInterval(this._tick); clearInterval(this._poll); this.stopCam();
+    clearInterval(this._tick); clearTimeout(this._poll); this.stopCam();
   }
 
   async decodeImage(file) {
@@ -2380,7 +2442,7 @@ class Component extends DCLogic {
     v.syncLabel = drafting
       ? (st.draftSaving ? 'Menyimpan…' : 'Perubahan belum disimpan')
       : online
-        ? (st.syncAt ? 'Tersimpan · ' + new Date(st.syncAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : 'Menyambungkan…')
+        ? (st.syncAt ? 'Tersimpan · ' + new Date(st.syncAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : 'Memuat data dari spreadsheet…')
         : 'Mode demo · data lokal';
     const tone = drafting ? { fg: '#8E1018', bg: '#FBEFEF', br: '#F0C9CC', dot: '#A5121C' }
       : online ? { fg: '#2C4D18', bg: '#EEF5E9', br: '#CFE2C2', dot: '#3E6B22' }
@@ -2390,7 +2452,7 @@ class Component extends DCLogic {
     v.showSaveNow = online;
     v.saveNowLabel = st.draftSaving ? 'Menyimpan…' : drafting ? 'Simpan perubahan' : 'Tersimpan';
     v.saveNowStyle = { background: drafting ? '#A5121C' : '#F1EBE3', color: drafting ? '#FFF' : '#8C8078', border: 'none', borderRadius: '100px', padding: '7px 16px', fontSize: '12px', fontWeight: 700, marginBottom: '6px', cursor: drafting ? 'pointer' : 'default' };
-    v.saveNow = () => { if (drafting && !st.draftSaving) this.flushDraft(); };
+    v.saveNow = () => { if (st.draftPending && !st.draftSaving) this.flushDraft(); };
 
     const cur = this.sess(st.adminSessionId) || db.sessions[0] || null;
     v.adminSessionId = cur ? cur.id : '';
