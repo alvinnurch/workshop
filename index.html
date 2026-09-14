@@ -236,7 +236,12 @@
                     </div>
                   </div>
                   <sc-if value="{{ checkinError }}" hint-placeholder-val="{{ false }}">
-                    <div style="background:#FCEDEE;border:1px solid #F0C9CC;color:#8E1018;border-radius:9px;padding:11px 13px;font-size:13.5px;line-height:1.5">{{ checkinError }}</div>
+                    <div style="background:#FCEDEE;border:1px solid #F0C9CC;color:#8E1018;border-radius:9px;padding:11px 13px;font-size:13.5px;line-height:1.5">
+                      {{ checkinError }}
+                      <sc-if value="{{ needNewTab }}" hint-placeholder-val="{{ false }}">
+                        <a href="{{ selfUrl }}" target="_blank" rel="noopener" style="display:inline-block;margin-top:10px;background:#A5121C;color:#FFF;border-radius:8px;padding:9px 14px;font-size:12.5px;font-weight:700;text-decoration:none">Buka di tab baru</a>
+                      </sc-if>
+                    </div>
                   </sc-if>
                 </div>
               </sc-if>
@@ -303,7 +308,7 @@
                     <button onClick="{{ submitQuiz }}" style="background:#A5121C;color:#FFF;border:none;border-radius:9px;padding:14px;font-size:15px;font-weight:700;margin-top:4px" style-hover="background:#8A0F17">Kirim jawaban</button>
                   </sc-if>
                   <sc-if value="{{ quizTimed }}" hint-placeholder-val="{{ false }}">
-                    <div style="font-size:12.5px;color:#8C8078;line-height:1.55">Jawaban tersimpan otomatis. Soal berganti sendiri saat waktu habis.</div>
+                    <div style="font-size:12.5px;color:#8C8078;line-height:1.55">{{ quizFlowNote }}</div>
                   </sc-if>
                 </div>
               </sc-if>
@@ -458,7 +463,7 @@
         </div>
       </div>
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap;margin-bottom:min(4vw,34px)">
-        <div>
+        <div style="{{ projHeadStyle }}">
           <div style="font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#D98A90">{{ projectorKicker }}</div>
           <h2 style="font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-size:clamp(26px,4.2vw,50px);line-height:1.1;margin:10px 0 0;font-weight:700;letter-spacing:-.02em;max-width:24ch;text-wrap:balance">{{ projectorTitle }}</h2>
         </div>
@@ -576,9 +581,9 @@
         </sc-if>
         <sc-if value="{{ projIdle }}" hint-placeholder-val="{{ false }}">
           <div style="text-align:center;max-width:560px">
-            <div style="font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:#A99C90;margin-bottom:16px">Menunggu fasilitator</div>
-            <div style="font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-size:clamp(24px,3.4vw,36px);line-height:1.25;font-weight:700">{{ idleTitle }}</div>
-            <div style="font-size:15px;color:#A99C90;margin-top:14px;line-height:1.6">Peserta dapat melakukan check in dan membuka materi sambil menunggu.</div>
+            <div style="font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:#A99C90;margin-bottom:16px">{{ idleKicker }}</div>
+            <div style="font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-size:clamp(26px,3.8vw,42px);line-height:1.2;font-weight:700">{{ idleTitle }}</div>
+            <div style="font-size:15px;color:#A99C90;margin-top:14px;line-height:1.6">{{ idleNote }}</div>
           </div>
         </sc-if>
       </div>
@@ -614,7 +619,7 @@
           <span style="{{ syncDotStyle }}"></span>{{ syncLabel }}
         </div>
         <sc-if value="{{ showSaveNow }}" hint-placeholder-val="{{ false }}">
-          <button onClick="{{ saveNow }}" style="background:#A5121C;color:#FFF;border:none;border-radius:100px;padding:7px 14px;font-size:12px;font-weight:700;margin-bottom:6px" style-hover="background:#8A0F17">Simpan sekarang</button>
+          <button onClick="{{ saveNow }}" style="{{ saveNowStyle }}">{{ saveNowLabel }}</button>
         </sc-if>
       </div>
       <sc-if value="{{ isDemoMode }}" hint-placeholder-val="{{ false }}">
@@ -1288,7 +1293,7 @@ class Component extends DCLogic {
     this._dirty = true;
     if (!this.state.draftPending) this.setState({ draftPending: true });
     clearTimeout(this._draftT);
-    this._draftT = setTimeout(() => this.flushDraft(), this.DRAFT_MS);
+    clearTimeout(this._pushT); this._pushT = null; this._busy = false;
     try { localStorage.setItem(this.KEY + '_draft', JSON.stringify(this.state.db)); } catch (e) {}
   }
   async flushDraft() {
@@ -1344,10 +1349,17 @@ class Component extends DCLogic {
     window.addEventListener('beforeunload', this._leave);
     this._blur = e => {
       const t = e.target;
-      if (this._dirty && t && /^(INPUT|TEXTAREA)$/.test(t.tagName)) { clearTimeout(this._draftT); this._draftT = setTimeout(() => this.flushDraft(), 1200); }
+      if (t && /^(INPUT|TEXTAREA)$/.test(t.tagName)) this._typedAt = 0;
     };
     document.addEventListener('focusout', this._blur, true);
     if (this.api()) {
+      try {
+        const draft = localStorage.getItem(this.KEY + '_draft');
+        if (draft) {
+          const db = JSON.parse(draft);
+          if (db && db.sessions) { this._dirty = true; this.setState({ db, draftPending: true }); }
+        }
+      } catch (e) {}
       this.apiGet().catch(() => {});
       this._poll = setInterval(() => { if (!this._busy) this.apiGet().catch(() => {}); }, 3000);
       this._tick = setInterval(() => { this.sweepRun(); if (this.runOf()) this.forceUpdate(); }, 400);
@@ -1366,10 +1378,10 @@ class Component extends DCLogic {
   }
   sweepRun() {
     const run = this.runOf();
-    if (!run) return;
+    if (!run || this.state.role !== 'admin') return;
     const s = this.state.db.sessions.find(x => x.id === this.state.db.activeSessionId);
     const block = s && (s.blocks || []).find(b => b.id === run.blockId);
-    if (block && this.runInfo(block) === null) this.save(d => { const t = d.sessions.find(x => x.id === s.id); if (t) t.run = null; });
+    if (block && this.runInfo(block) === null) this.save(d => { const t = d.sessions.find(x => x.id === s.id); if (t) t.run = null; }, null, true);
   }
   runOf() {
     const s = this.state.db.sessions.find(x => x.id === this.state.db.activeSessionId);
@@ -1415,13 +1427,25 @@ class Component extends DCLogic {
   }
   async startCam() {
     this.setState({ scanning: true, checkinError: '' });
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      return this.setState({ scanning: false, checkinError: 'Kamera tidak tersedia di tampilan ini. Buka halaman di tab peramban tersendiri, unggah foto barcode, atau masukkan kodenya.' });
+    const legacy = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
+    const grab = c => {
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) return navigator.mediaDevices.getUserMedia(c);
+      if (legacy) return new Promise((res, rej) => legacy.call(navigator, c, res, rej));
+      return Promise.reject(new Error('unsupported'));
+    };
+    if (!navigator.mediaDevices && !legacy) {
+      const insecure = location.protocol !== 'https:' && location.hostname !== 'localhost';
+      return this.setState({
+        scanning: false, needNewTab: true,
+        checkinError: insecure
+          ? 'Kamera hanya dapat diakses lewat alamat https. Minta panitia membuka halaman ini melalui tautan https, atau gunakan kode lima huruf di bawah barcode.'
+          : 'Tampilan ini tidak memberi izin kamera. Tekan tombol di bawah untuk membuka halaman di tab tersendiri, lalu izinkan kamera.'
+      });
     }
     try {
       let stream;
-      try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } }); }
-      catch (e1) { stream = await navigator.mediaDevices.getUserMedia({ video: true }); }
+      try { stream = await grab({ video: { facingMode: { ideal: 'environment' } } }); }
+      catch (e1) { stream = await grab({ video: true }); }
       this._stream = stream;
       const el = this._video && this._video.current;
       if (el) { el.srcObject = stream; await el.play().catch(() => {}); }
@@ -1441,9 +1465,9 @@ class Component extends DCLogic {
     } catch (e) {
       const denied = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
       this.setState({
-        scanning: false,
+        scanning: false, needNewTab: denied,
         checkinError: denied
-          ? 'Izin kamera ditolak atau diblokir tampilan pratinjau. Buka halaman di tab peramban tersendiri dan izinkan kamera, atau unggah foto barcode / masukkan kodenya.'
+          ? 'Izin kamera ditolak. Jika halaman ini terbuka di dalam tampilan lain, buka di tab tersendiri lewat tombol di bawah lalu izinkan kamera.'
           : 'Kamera tidak dapat diakses (' + ((e && e.name) || 'tidak diketahui') + '). Unggah foto barcode atau masukkan kode lima hurufnya.'
       });
     }
@@ -1455,34 +1479,62 @@ class Component extends DCLogic {
     if (el) el.srcObject = null;
   }
 
-  save(mut, apiPayload) {
+  /* now=true untuk kendali langsung (buka materi, mulai kuis) — selebihnya menunggu tombol Simpan. */
+  save(mut, apiPayload, now) {
     const online = !!this.api();
+    const admin = this.state.role === 'admin';
     this.setState(s => {
       const db = JSON.parse(JSON.stringify(s.db));
       mut(db);
       if (!online) { try { localStorage.setItem(this.KEY, JSON.stringify(db)); } catch (e) {} }
+      else if (admin && !apiPayload && !now) { try { localStorage.setItem(this.KEY + '_draft', JSON.stringify(db)); } catch (e) {} }
       return { db };
     });
     if (!online) return;
-    this._busy = true;
     clearTimeout(this._pushT);
     this._pushT = null;
     if (apiPayload) {
+      this._busy = true;
       this._pushT = setTimeout(() => {
         this._pushT = null; this._busy = false;
         this.apiPost(apiPayload);
       }, 150);
       return;
     }
-    if (this.state.role === 'admin' && !this._dirty) {
-      this.setState({ draftSaving: true });
-      this._pushT = setTimeout(async () => {
-        this._pushT = null; this._busy = false;
-        try { await this.apiPush(this.state.db); } finally { this.setState({ draftSaving: false }); }
-      }, 400);
+    if (!admin) { this._busy = false; return; }
+    if (!now) {
+      this._dirty = true;
+      this._typedAt = Date.now();
+      this._busy = true;
+      if (!this.state.draftPending) this.setState({ draftPending: true });
       return;
     }
-    this._busy = false;
+    this._busy = true;
+    if (this._dirty) {
+      /* Ada draf belum disimpan: kirim hanya potongan kendali langsung lewat aksi terpisah. */
+      this._pushT = setTimeout(() => {
+        this._pushT = null; this._busy = false;
+        const d = this.state.db;
+        const s = d.sessions.find(x => x.id === d.activeSessionId) || null;
+        this.apiPost({
+          action: 'putLive', password: this._pw || '',
+          activeSessionId: d.activeSessionId,
+          sessionId: s ? s.id : '',
+          active: s ? s.active : null,
+          run: s ? (s.run || null) : null,
+          open: s ? (s.blocks || []).map(b => ({ id: b.id, open: !!b.open })) : []
+        });
+      }, 200);
+      return;
+    }
+    this.setState({ draftSaving: true });
+    this._pushT = setTimeout(async () => {
+      this._pushT = null; this._busy = false;
+      try { await this.apiPush(this.state.db); } finally {
+        try { localStorage.removeItem(this.KEY + '_draft'); } catch (e) {}
+        this.setState({ draftSaving: false });
+      }
+    }, 250);
   }
   code(taken) {
     const used = new Set((taken || []).map(c => String(c).trim().toUpperCase()));
@@ -2011,6 +2063,8 @@ class Component extends DCLogic {
         v.needCheckin = !R.checkins[me.id];
         v.scanActive = st.scanning; v.scanIdle = !st.scanning;
         v.checkinCode = st.checkinCode; v.checkinError = st.checkinError;
+        v.needNewTab = !!st.needNewTab;
+        v.selfUrl = typeof location !== 'undefined' ? location.href : '#';
         v.videoRef = this._video || (this._video = React.createRef());
         const accept = raw => {
           const want = String(pb.token || '').toUpperCase();
@@ -2066,12 +2120,16 @@ class Component extends DCLogic {
           v.quizScore = store ? store.score : '';
           v.quizScoreNote = store ? (store.score >= 80 ? 'Pemahaman Anda sudah kuat.' : 'Tinjau kembali bagian verifikasi dan tabayun.') : '';
           const perSoal = !!pb.timed && (pb.timeMode || 'per') === 'per';
-          const oneAtATime = perSoal && !(info && info.finished);
+          const oneAtATime = perSoal && !!info && !info.finished;
           const curIdx = info && !info.finished ? info.index : 0;
           const totalQ = (pb.questions || []).length;
           const running = !!(info && !info.finished);
           v.quizTimed = running || oneAtATime;
-          v.quizUntimed = !running;
+          /* Mode per soal: tidak ada tombol kirim — jawaban dikumpulkan otomatis setelah soal terakhir. */
+          v.quizUntimed = !oneAtATime;
+          v.quizFlowNote = oneAtATime
+            ? 'Soal ' + (info.index + 1) + ' dari ' + info.total + ' · jawaban tersimpan otomatis. Tombol kirim muncul setelah soal terakhir.'
+            : 'Jawaban tersimpan otomatis. Soal berganti sendiri saat waktu habis.';
           v.quizWaiting = !!pb.timed && !info && !store;
           v.quizWaitNote = pb.timed && (pb.timeMode || 'per') === 'total'
             ? 'Kuis ini berbatas waktu ' + this.fmtTime(pb.seconds || 300) + ' untuk seluruh soal. Anda dapat mulai menjawab sekarang; hitungan mundur berjalan saat fasilitator memulainya.'
@@ -2245,9 +2303,17 @@ class Component extends DCLogic {
         });
       }
       v.projIdle = !ab;
-      v.idleTitle = live.title;
-      v.projectorKicker = ab ? (picked ? 'Pratinjau · ' : '') + this.KINDS[ab.type] + (String(ab.presenter || '').trim() ? ' · ' + ab.presenter : '') : live.title;
-      v.projectorTitle = ab ? (ab.type === 'wordcloud' ? (ab.prompt || ab.title) : ab.title) : live.title;
+      const anyOpen = (live.blocks || []).some(b => b.enabled && b.open);
+      v.idleKicker = anyOpen ? 'Menunggu fasilitator' : 'Belum dimulai';
+      v.idleTitle = anyOpen ? live.title : 'Sesi belum dimulai';
+      v.idleNote = anyOpen
+        ? 'Peserta dapat melakukan check in dan membuka materi sambil menunggu.'
+        : 'Menunggu fasilitator membuka materi pertama.';
+      v.projHeadStyle = ab ? {} : { visibility: 'hidden', height: 0, overflow: 'hidden' };
+      v.projectorKicker = ab ? (picked ? 'Pratinjau · ' : '') + this.KINDS[ab.type] + (String(ab.presenter || '').trim() ? ' · ' + ab.presenter : '') : '';
+      v.projectorTitle = ab ? (ab.type === 'wordcloud' ? (ab.prompt || ab.title) : ab.title) : '';
+      v.idleTitle = anyOpen ? live.title : 'Sesi belum dimulai';
+      v.idleKicker = anyOpen ? 'Menunggu fasilitator' : live.title;
       if (ab && st.role === 'projector') {
         v.panelDesc = ab.desc; v.panelPresenter = ab.presenter ? 'Pengisi: ' + ab.presenter : '';
         if (ab.type === 'zoom') v.docMeta = [{ label: 'Meeting ID', value: ab.meetingId || '—' }, { label: 'Passcode', value: ab.passcode || '—' }];
@@ -2294,8 +2360,11 @@ class Component extends DCLogic {
         });
       }
     } else {
-      v.checkInCount = 0; v.projIdle = true; v.projViews = []; v.idleTitle = 'Belum ada sesi aktif';
-      v.projectorKicker = 'Platform Workshop Terintegrasi'; v.projectorTitle = 'Menunggu sesi dibuka';
+      v.checkInCount = 0; v.projIdle = true; v.projViews = [];
+      v.idleKicker = 'Platform Workshop Terintegrasi'; v.idleTitle = 'Sesi belum dimulai';
+      v.idleNote = 'Menunggu fasilitator.';
+      v.projHeadStyle = { visibility: 'hidden', height: 0, overflow: 'hidden' };
+      v.projectorKicker = ''; v.projectorTitle = '';
     }
 
     /* ── ADMIN ── */
@@ -2318,8 +2387,10 @@ class Component extends DCLogic {
       : { fg: '#8C8078', bg: '#F1EBE3', br: '#E6DFD6', dot: '#B5A99D' };
     v.syncStyle = { display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '12px', fontWeight: 600, color: tone.fg, background: tone.bg, border: '1px solid ' + tone.br, borderRadius: '100px', padding: '6px 12px', marginBottom: '6px' };
     v.syncDotStyle = { width: '7px', height: '7px', borderRadius: '50%', flex: 'none', background: tone.dot, animation: (online || drafting) ? 'wsPulse 2s infinite' : 'none' };
-    v.showSaveNow = drafting;
-    v.saveNow = () => this.flushDraft();
+    v.showSaveNow = online;
+    v.saveNowLabel = st.draftSaving ? 'Menyimpan…' : drafting ? 'Simpan perubahan' : 'Tersimpan';
+    v.saveNowStyle = { background: drafting ? '#A5121C' : '#F1EBE3', color: drafting ? '#FFF' : '#8C8078', border: 'none', borderRadius: '100px', padding: '7px 16px', fontSize: '12px', fontWeight: 700, marginBottom: '6px', cursor: drafting ? 'pointer' : 'default' };
+    v.saveNow = () => { if (drafting && !st.draftSaving) this.flushDraft(); };
 
     const cur = this.sess(st.adminSessionId) || db.sessions[0] || null;
     v.adminSessionId = cur ? cur.id : '';
@@ -2442,7 +2513,7 @@ class Component extends DCLogic {
         select: () => this.setState({ adminSessionId: s.id, editBlock: null }),
         activateLabel: isActive ? 'Sedang aktif' : 'Jadikan aktif',
         activateStyle: { background: isActive ? '#F6F1EA' : '#3E6B22', border: isActive ? '1px solid #E0D8CE' : 'none', color: isActive ? '#8C8078' : '#FFF', borderRadius: '7px', padding: '7px 11px', fontSize: '12px', fontWeight: 700 },
-        activate: () => this.save(d => { d.activeSessionId = s.id; }),
+        activate: () => this.save(d => { d.activeSessionId = s.id; }, null, true),
         remove: () => this.save(d => {
           if (d.sessions.length <= 1) return;
           d.sessions = d.sessions.filter(x => x.id !== s.id);
@@ -2477,7 +2548,7 @@ class Component extends DCLogic {
         label: this.KINDS[t],
         add: () => { const b = this.newBlock(t); this.save(d => { d.sessions.find(s => s.id === cur.id).blocks.push(b); }); this.setState({ editBlock: b.id }); }
       }));
-      v.closeAll = () => this.save(d => { const s = d.sessions.find(x => x.id === cur.id); s.blocks.forEach(b => { b.open = false; }); s.active = null; });
+      v.closeAll = () => this.save(d => { const s = d.sessions.find(x => x.id === cur.id); s.blocks.forEach(b => { b.open = false; }); s.active = null; }, null, true);
 
       const mut = (bid, fn) => this.save(d => { const s = d.sessions.find(x => x.id === cur.id); fn(s.blocks.find(b => b.id === bid), s, d); });
       const move = (from, to) => this.save(d => {
@@ -2513,7 +2584,7 @@ class Component extends DCLogic {
           toggleEnabled: () => mut(b.id, (x, s) => { x.enabled = !x.enabled; if (!x.enabled) { x.open = false; if (s.active === x.id) s.active = null; } }),
           openLabel: b.open ? 'Tutup' : 'Buka & tampilkan',
           openBtnStyle: { background: b.open ? '#F6F1EA' : '#A5121C', border: b.open ? '1px solid #E0D8CE' : 'none', color: b.open ? '#5C534B' : '#FFF', borderRadius: '8px', padding: '8px 12px', fontSize: '12.5px', fontWeight: 700, opacity: b.enabled ? 1 : 0.4 },
-          toggleOpen: () => { if (!b.enabled) return; mut(b.id, (x, s) => { x.open = !x.open; s.active = x.open ? x.id : null; }); },
+          toggleOpen: () => { if (!b.enabled) return; this.save(d => { const s = d.sessions.find(x => x.id === cur.id); const x = s.blocks.find(y => y.id === b.id); x.open = !x.open; s.active = x.open ? x.id : null; }, null, true); },
           remove: () => { this.setState({ editBlock: null }); this.save(d => { const s = d.sessions.find(x => x.id === cur.id); s.blocks = s.blocks.filter(x => x.id !== b.id); if (s.active === b.id) s.active = null; }); },
           onTitle: e => { const val = e.target.value; this.markDraft(); mut(b.id, x => { x.title = val; }); },
           onDesc: e => { const val = e.target.value; this.markDraft(); mut(b.id, x => { x.desc = val; }); },
@@ -2562,7 +2633,7 @@ class Component extends DCLogic {
             const s = d.sessions.find(x => x.id === cur.id);
             s.run = (s.run && s.run.blockId === b.id) ? null : { blockId: b.id, start: Date.now(), seconds: b.seconds || 30, timeMode: b.timeMode || 'per' };
             if (s.run) { s.blocks.forEach(x => { if (x.id === b.id) x.open = true; }); s.active = b.id; }
-          }),
+          }, null, true),
           questionCount: (b.questions || []).length,
           addQuestion: () => mut(b.id, x => { x.questions.push(this.qz('', ['', '', '', ''], 0)); }),
           questions: (b.questions || []).map((q, qi) => ({
