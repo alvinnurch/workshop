@@ -9,7 +9,6 @@
 <body>
 <x-dc>
 <helmet>
-<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -23,7 +22,6 @@
   @keyframes wsPulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
   @keyframes wsRise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 </style>
-<script src="https://unpkg.com/jsqr@1.4.0/dist/jsQR.js"></script>
 </helmet>
 <div style="min-height:100vh;display:flex;flex-direction:column;font-family:'IBM Plex Sans',system-ui,sans-serif">
 
@@ -286,11 +284,12 @@
                 </div>
               </sc-if>
               <sc-if value="{{ quizTimed }}" hint-placeholder-val="{{ false }}">
-                <div style="background:#FAF6F0;border:1px solid #EDE6DD;border-radius:10px;padding:13px 16px;margin-bottom:18px">
-                  <div style="display:flex;justify-content:space-between;gap:12px;font-size:12.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#5C534B;margin-bottom:8px">
-                    <span>{{ timerLabel }}</span><span>{{ timerCount }}</span>
+                <div style="background:#1B1714;border-radius:12px;padding:16px 20px;margin-bottom:20px;position:sticky;top:8px;z-index:2">
+                  <div style="display:flex;justify-content:space-between;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:10px">
+                    <span style="font-size:12px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#D98A90">{{ timerLabel }}</span>
+                    <span style="font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-size:34px;font-weight:800;line-height:1;letter-spacing:-.02em;color:#FBF7F1;font-variant-numeric:tabular-nums">{{ timerCount }}</span>
                   </div>
-                  <div style="height:8px;background:#EDE6DD;border-radius:100px;overflow:hidden"><div style="{{ timerBarStyle }}"></div></div>
+                  <div style="height:7px;background:#3A312B;border-radius:100px;overflow:hidden"><div style="{{ timerBarStyle }}"></div></div>
                 </div>
               </sc-if>
               <sc-if value="{{ quizOpenForm }}" hint-placeholder-val="{{ true }}">
@@ -1431,8 +1430,9 @@ class Component extends DCLogic {
       this.apiGet(true).catch(() => {});
       const loop = () => {
         const r = this.state.role;
-        const live = r === 'projector' || r === 'peserta';
-        const wait = live ? (this.runOf() ? 1200 : 2000) : (this.runOf() ? 2500 : 5000);
+        const wait = r === 'projector' ? (this.runOf() ? 700 : 900)
+          : r === 'peserta' ? (this.runOf() ? 900 : 1500)
+          : (this.runOf() ? 2500 : 5000);
         this._poll = setTimeout(() => {
           const st = this.state;
           const editing = (st.role === 'admin' || st.role === 'adminLogin') &&
@@ -1495,6 +1495,39 @@ class Component extends DCLogic {
   }
 
   /* Cadangan untuk Safari/Firefox yang tidak punya BarcodeDetector. */
+  /* Pustaka QR dimuat hanya saat pemindaian pertama, tidak memblokir tampilan. */
+  /* Pembuat QR juga dimuat belakangan agar halaman tidak menunggu CDN. */
+  loadQrGen() {
+    if (typeof qrcode === 'function') return Promise.resolve(true);
+    if (this._qrGen) return this._qrGen;
+    this._qrGen = new Promise(res => {
+      const el = document.createElement('script');
+      el.src = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js';
+      el.async = true;
+      const done = ok => res(!!(ok && typeof qrcode === 'function'));
+      const t = setTimeout(() => done(false), 4000);
+      el.onload = () => { clearTimeout(t); done(true); };
+      el.onerror = () => { clearTimeout(t); done(false); };
+      document.head.appendChild(el);
+    });
+    this._qrGen.then(ok => { if (ok) this.forceUpdate(); });
+    return this._qrGen;
+  }
+  loadQr() {
+    if (window.jsQR) return Promise.resolve(true);
+    if (this._qrLoad) return this._qrLoad;
+    this._qrLoad = new Promise(res => {
+      const el = document.createElement('script');
+      el.src = 'https://unpkg.com/jsqr@1.4.0/dist/jsQR.js';
+      el.async = true;
+      const done = ok => res(!!(ok && window.jsQR));
+      const t = setTimeout(() => done(false), 4000);
+      el.onload = () => { clearTimeout(t); done(true); };
+      el.onerror = () => { clearTimeout(t); done(false); };
+      document.head.appendChild(el);
+    });
+    return this._qrLoad;
+  }
   qrFrom(src, w, h) {
     const jsQR = typeof window !== 'undefined' && (window.jsQR || window.jsQr);
     if (!jsQR || !w || !h) return null;
@@ -1518,7 +1551,7 @@ class Component extends DCLogic {
           if (codes && codes.length) val = codes[0].rawValue;
         } catch (e) {}
       }
-      if (!val) val = this.qrFrom(bmp, bmp.width, bmp.height);
+      if (!val) { await this.loadQr(); val = this.qrFrom(bmp, bmp.width, bmp.height); }
       if (val && this._accept) this._accept(val);
       else this.setState({ checkinError: 'Barcode tidak terbaca dari gambar. Coba foto lebih dekat atau masukkan kode lima hurufnya.' });
     } catch (e) {
@@ -1550,8 +1583,9 @@ class Component extends DCLogic {
       const el = this._video && this._video.current;
       if (el) { el.srcObject = stream; await el.play().catch(() => {}); }
       const det = ('BarcodeDetector' in window) ? new window.BarcodeDetector({ formats: ['qr_code'] }) : null;
-      if (!det && !(window.jsQR || window.jsQr)) {
-        this.setState({ checkinError: 'Pembaca barcode belum termuat. Periksa koneksi internet, atau masukkan kode lima huruf di bawah barcode.' });
+      if (!det) {
+        const loaded = await this.loadQr();
+        if (!loaded) this.setState({ checkinError: 'Pembaca barcode tidak dapat dimuat. Periksa koneksi internet, atau masukkan kode lima huruf di bawah barcode.' });
       }
       this._timer = setInterval(async () => {
         const v = this._video && this._video.current;
@@ -1655,7 +1689,7 @@ class Component extends DCLogic {
   qz(text, options, answer) { return { id: this.uid('q'), text, options, answer }; }
   token() { let s = ''; for (let i = 0; i < 5; i++) s += 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]; return s; }
   qrSvg(text, dark) {
-    if (typeof qrcode !== 'function') return null;
+    if (typeof qrcode !== 'function') { this.loadQrGen(); return null; }
     const qr = qrcode(0, 'M');
     qr.addData(text); qr.make();
     const n = qr.getModuleCount(), pad = 2, size = n + pad * 2;
