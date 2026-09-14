@@ -23,6 +23,7 @@
   @keyframes wsPulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
   @keyframes wsRise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 </style>
+<script src="https://unpkg.com/jsqr@1.4.0/dist/jsQR.js"></script>
 </helmet>
 <div style="min-height:100vh;display:flex;flex-direction:column;font-family:'IBM Plex Sans',system-ui,sans-serif">
 
@@ -264,8 +265,11 @@
                   <div style="font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#7A6F66">Skor Anda</div>
                   <div style="font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-size:52px;font-weight:700;line-height:1.05;margin:8px 0 4px">{{ quizScore }}</div>
                   <div style="font-size:14px;color:#5C534B">{{ quizScoreNote }}</div>
+                  <sc-if value="{{ retakeNote }}" hint-placeholder-val="{{ false }}">
+                    <div style="font-size:12.5px;color:#8C8078;margin-top:16px;line-height:1.55">{{ retakeNote }}</div>
+                  </sc-if>
                   <sc-if value="{{ canRetake }}" hint-placeholder-val="{{ false }}">
-                    <button onClick="{{ retakeQuiz }}" style="background:#FFF;border:1px solid #E0D8CE;color:#5C534B;border-radius:9px;padding:11px 16px;font-size:13px;font-weight:600;margin-top:18px" style-hover="background:#F6F1EA;color:#1B1714">Kerjakan ulang</button>
+                    <button onClick="{{ retakeQuiz }}" style="background:#FFF;border:1px solid #E0D8CE;color:#5C534B;border-radius:9px;padding:11px 16px;font-size:13px;font-weight:600;margin-top:18px" style-hover="background:#F6F1EA;color:#1B1714">{{ retakeBtnLabel }}</button>
                   </sc-if>
                 </div>
               </sc-if>
@@ -818,6 +822,13 @@
                               <div style="font-size:12px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#5C534B">Soal kuis ({{ b.questionCount }})</div>
                               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                                 <button onClick="{{ b.toggleRetake }}" style="{{ b.retakeStyle }}">{{ b.retakeLabel }}</button>
+                                <sc-if value="{{ b.allowRetake }}" hint-placeholder-val="{{ false }}">
+                                  <label style="display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:#5C534B">
+                                    maksimal
+                                    <input value="{{ b.retakeMax }}" onChange="{{ b.onRetakeMax }}" type="number" min="1" max="10" style="width:62px;border:1px solid #DCD3C8;border-radius:7px;padding:7px 9px;font-size:12.5px;background:#FFF;outline:none" style-focus="border-color:#A5121C" />
+                                    kali kerjakan
+                                  </label>
+                                </sc-if>
                                 <button onClick="{{ b.toggleTimed }}" style="{{ b.timedStyle }}">{{ b.timedLabel }}</button>
                                 <sc-if value="{{ b.timed }}" hint-placeholder-val="{{ false }}">
                                   <select value="{{ b.timeMode }}" onChange="{{ b.onTimeMode }}" style="border:1px solid #DCD3C8;border-radius:7px;padding:7px 10px;font-size:12.5px;background:#FFF;outline:none">
@@ -1419,7 +1430,9 @@ class Component extends DCLogic {
       } catch (e) {}
       this.apiGet(true).catch(() => {});
       const loop = () => {
-        const wait = this.runOf() ? 2500 : 5000;
+        const r = this.state.role;
+        const live = r === 'projector' || r === 'peserta';
+        const wait = live ? (this.runOf() ? 1200 : 2000) : (this.runOf() ? 2500 : 5000);
         this._poll = setTimeout(() => {
           const st = this.state;
           const editing = (st.role === 'admin' || st.role === 'adminLogin') &&
@@ -1481,14 +1494,33 @@ class Component extends DCLogic {
     clearInterval(this._tick); clearTimeout(this._poll); this.stopCam();
   }
 
+  /* Cadangan untuk Safari/Firefox yang tidak punya BarcodeDetector. */
+  qrFrom(src, w, h) {
+    const jsQR = typeof window !== 'undefined' && (window.jsQR || window.jsQr);
+    if (!jsQR || !w || !h) return null;
+    const c = this._qrCanvas || (this._qrCanvas = document.createElement('canvas'));
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(src, 0, 0, w, h);
+    try {
+      const px = ctx.getImageData(0, 0, w, h);
+      const out = jsQR(px.data, w, h);
+      return out && out.data ? out.data : null;
+    } catch (e) { return null; }
+  }
   async decodeImage(file) {
-    if (!('BarcodeDetector' in window)) return this.setState({ checkinError: 'Peramban ini belum mendukung pembacaan barcode dari gambar. Masukkan kode lima huruf di bawah barcode.' });
     try {
       const bmp = await createImageBitmap(file);
-      const det = new window.BarcodeDetector({ formats: ['qr_code'] });
-      const codes = await det.detect(bmp);
-      if (codes && codes.length && this._accept) this._accept(codes[0].rawValue);
-      else this.setState({ checkinError: 'Barcode tidak terbaca dari gambar. Coba foto lebih dekat atau masukkan kodenya.' });
+      let val = null;
+      if ('BarcodeDetector' in window) {
+        try {
+          const codes = await new window.BarcodeDetector({ formats: ['qr_code'] }).detect(bmp);
+          if (codes && codes.length) val = codes[0].rawValue;
+        } catch (e) {}
+      }
+      if (!val) val = this.qrFrom(bmp, bmp.width, bmp.height);
+      if (val && this._accept) this._accept(val);
+      else this.setState({ checkinError: 'Barcode tidak terbaca dari gambar. Coba foto lebih dekat atau masukkan kode lima hurufnya.' });
     } catch (e) {
       this.setState({ checkinError: 'Gambar tidak dapat dibaca. Masukkan kode lima huruf di bawah barcode.' });
     }
@@ -1517,18 +1549,22 @@ class Component extends DCLogic {
       this._stream = stream;
       const el = this._video && this._video.current;
       if (el) { el.srcObject = stream; await el.play().catch(() => {}); }
-      if (!('BarcodeDetector' in window)) {
-        this.setState({ checkinError: 'Peramban ini belum mendukung pemindaian otomatis. Masukkan kode di bawah barcode.' });
-        return;
+      const det = ('BarcodeDetector' in window) ? new window.BarcodeDetector({ formats: ['qr_code'] }) : null;
+      if (!det && !(window.jsQR || window.jsQr)) {
+        this.setState({ checkinError: 'Pembaca barcode belum termuat. Periksa koneksi internet, atau masukkan kode lima huruf di bawah barcode.' });
       }
-      const det = new window.BarcodeDetector({ formats: ['qr_code'] });
       this._timer = setInterval(async () => {
         const v = this._video && this._video.current;
         if (!v || v.readyState < 2) return;
-        try {
-          const codes = await det.detect(v);
-          if (codes && codes.length && this._accept) this._accept(codes[0].rawValue);
-        } catch (e) {}
+        let val = null;
+        if (det) {
+          try {
+            const codes = await det.detect(v);
+            if (codes && codes.length) val = codes[0].rawValue;
+          } catch (e) {}
+        }
+        if (!val) val = this.qrFrom(v, v.videoWidth, v.videoHeight);
+        if (val && this._accept) this._accept(val);
       }, 400);
     } catch (e) {
       const denied = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
@@ -1996,7 +2032,7 @@ class Component extends DCLogic {
     if (type === 'checkin') { b.title = 'Check in peserta'; b.desc = 'Pindai barcode di layar proyektor untuk mencatat kehadiran.'; b.token = this.token(); }
     if (type === 'ppt') { b.title = 'Materi paparan'; b.url = ''; b.fileName = 'Materi.pptx'; }
     if (type === 'zoom') { b.title = 'Ruang Zoom'; b.url = ''; b.meetingId = ''; b.passcode = ''; }
-    if (type === 'quiz') { b.title = 'Kuis baru'; b.quizKind = 'pre'; b.allowRetake = false; b.questions = [this.qz('', ['', '', '', ''], 0)]; }
+    if (type === 'quiz') { b.title = 'Kuis baru'; b.quizKind = 'pre'; b.allowRetake = false; b.retakeMax = 2; b.questions = [this.qz('', ['', '', '', ''], 0)]; }
     if (type === 'wordcloud') { b.title = 'Word cloud'; b.prompt = 'Tulis satu kata…'; }
     if (type === 'feedback') { b.title = 'Umpan balik sesi'; }
     if (type === 'form') { b.title = 'Formulir baru'; b.fields = [{ id: this.uid('f'), label: 'Isian baru', type: 'short', required: false, options: [] }]; }
@@ -2179,7 +2215,8 @@ class Component extends DCLogic {
             this.save(d => {
               const r = this.ensure(d, live.id);
               if (!r.quiz[pb.id]) r.quiz[pb.id] = {};
-              r.quiz[pb.id][me.id] = { answers, score };
+              const prev0 = (r.quiz[pb.id] || {})[me.id];
+              r.quiz[pb.id][me.id] = { answers, score, tries: ((prev0 && prev0.tries) || 0) + 1 };
             }, { action: 'quiz', sessionId: live.id, blockId: pb.id, id: me.id, answers });
           };
           const engaged = Object.keys(st.draft).some(k => k.indexOf(pb.id + '-') === 0);
@@ -2227,9 +2264,17 @@ class Component extends DCLogic {
             };
           });
           v.submitQuiz = submit;
-          v.canRetake = !!pb.allowRetake;
+          const maxTries = Math.max(1, pb.retakeMax || 2);
+          /* Percobaan tercatat pada jawaban di spreadsheet, tidak bisa disetel ulang dari peramban. */
+          this._tries = this._tries || {};
+          const used = store ? Math.max(1, store.tries || 1) : (this._tries[pb.id] || 0);
+          const left = Math.max(0, maxTries - used);
+          v.canRetake = !!pb.allowRetake && left > 0;
+          v.retakeBtnLabel = 'Kerjakan ulang · sisa ' + left + ' dari ' + maxTries + ' kesempatan';
+          v.retakeNote = pb.allowRetake && left === 0 ? 'Kesempatan mengerjakan sudah terpakai semua (' + maxTries + '\u00d7).' : '';
           v.retakeQuiz = () => {
-            if (!pb.allowRetake) return;
+            if (!pb.allowRetake || left <= 0) return;
+            this._tries[pb.id] = used;
             this._autoSent = pb.id;
             this.setState(x => {
               const draft = Object.assign({}, x.draft);
@@ -2664,7 +2709,21 @@ class Component extends DCLogic {
           toggleEnabled: () => mut(b.id, (x, s) => { x.enabled = !x.enabled; if (!x.enabled) { x.open = false; if (s.active === x.id) s.active = null; } }),
           openLabel: b.open ? 'Tutup' : 'Buka & tampilkan',
           openBtnStyle: { background: b.open ? '#F6F1EA' : '#A5121C', border: b.open ? '1px solid #E0D8CE' : 'none', color: b.open ? '#5C534B' : '#FFF', borderRadius: '8px', padding: '8px 12px', fontSize: '12.5px', fontWeight: 700, opacity: b.enabled ? 1 : 0.4 },
-          toggleOpen: () => { if (!b.enabled) return; this.save(d => { const s = d.sessions.find(x => x.id === cur.id); const x = s.blocks.find(y => y.id === b.id); x.open = !x.open; s.active = x.open ? x.id : null; }, null, true); },
+          toggleOpen: () => {
+            if (!b.enabled) return;
+            this.save(d => {
+              const s = d.sessions.find(x => x.id === cur.id);
+              const x = s.blocks.find(y => y.id === b.id);
+              x.open = !x.open;
+              s.active = x.open ? x.id : null;
+              /* Kuis berbatas waktu: hitungan menyala begitu materinya dibuka. */
+              if (x.type === 'quiz' && x.timed) {
+                s.run = x.open ? { blockId: x.id, start: Date.now(), seconds: x.seconds || 30, timeMode: x.timeMode || 'per' } : null;
+              } else if (!x.open && s.run && s.run.blockId === x.id) {
+                s.run = null;
+              }
+            }, null, true);
+          },
           remove: () => { this.setState({ editBlock: null }); this.save(d => { const s = d.sessions.find(x => x.id === cur.id); s.blocks = s.blocks.filter(x => x.id !== b.id); if (s.active === b.id) s.active = null; }); },
           onTitle: e => { const val = e.target.value; this.markDraft(); mut(b.id, x => { x.title = val; }); },
           onDesc: e => { const val = e.target.value; this.markDraft(); mut(b.id, x => { x.desc = val; }); },
@@ -2690,7 +2749,10 @@ class Component extends DCLogic {
           onQuizKind: e => { const val = e.target.value; mut(b.id, x => { x.quizKind = val; }); },
           retakeLabel: b.allowRetake ? '↻ Boleh kerjakan ulang' : '↻ Sekali kerjakan',
           retakeStyle: { background: b.allowRetake ? '#EEF5E9' : '#FFF', border: '1px solid ' + (b.allowRetake ? '#CFE2C2' : '#E0D8CE'), color: b.allowRetake ? '#2C4D18' : '#7A6F66', borderRadius: '7px', padding: '7px 11px', fontSize: '12.5px', fontWeight: 700 },
-          toggleRetake: () => mut(b.id, x => { x.allowRetake = !x.allowRetake; }),
+          toggleRetake: () => mut(b.id, x => { x.allowRetake = !x.allowRetake; if (x.allowRetake && !x.retakeMax) x.retakeMax = 2; }),
+          allowRetake: !!b.allowRetake,
+          retakeMax: b.retakeMax || 2,
+          onRetakeMax: e => { const n = Math.max(1, Math.min(10, parseInt(e.target.value, 10) || 1)); this.markDraft(); mut(b.id, x => { x.retakeMax = n; }); },
           timed: !!b.timed, seconds: b.seconds || ((b.timeMode || 'per') === 'total' ? 300 : 30),
           timeMode: b.timeMode || 'per',
           secondsUnit: (b.timeMode || 'per') === 'total' ? 'detik total' : 'detik/soal',
@@ -2699,9 +2761,9 @@ class Component extends DCLogic {
           timedStyle: { background: b.timed ? '#FBEFEF' : '#FFF', border: '1px solid ' + (b.timed ? '#F0C9CC' : '#E0D8CE'), color: b.timed ? '#A5121C' : '#7A6F66', borderRadius: '7px', padding: '7px 11px', fontSize: '12.5px', fontWeight: 700 },
           toggleTimed: () => mut(b.id, x => { x.timed = !x.timed; if (x.timed && !x.seconds) x.seconds = 30; }),
           onSeconds: e => { const val = Math.max(5, Math.min(3600, Number(e.target.value) || 30)); mut(b.id, x => { x.seconds = val; }); },
-          canRun: b.type === 'quiz' && b.timed && b.enabled && b.open,
+          canRun: b.type === 'quiz' && b.timed && b.enabled && b.open && !(cur.run && cur.run.blockId === b.id),
           running: !!(cur.run && cur.run.blockId === b.id),
-          runLabel: (cur.run && cur.run.blockId === b.id) ? 'Hentikan hitungan' : '▶ Mulai hitungan',
+          runLabel: '↻ Ulangi hitungan',
           runBtnStyle: { background: (cur.run && cur.run.blockId === b.id) ? '#FFF' : '#3E6B22', border: (cur.run && cur.run.blockId === b.id) ? '1px solid #E9DCDC' : 'none', color: (cur.run && cur.run.blockId === b.id) ? '#A5121C' : '#FFF', borderRadius: '8px', padding: '8px 12px', fontSize: '12.5px', fontWeight: 700 },
           runStatus: (() => {
             const info = this.runInfo(b);
