@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: ruang-workshop
+    runtime: node
+    plan: starter
+    region: singapore
+    buildCommand: "echo tanpa build"
+    startCommand: node server.js
+    healthCheckPath: /api?action=health
+    envVars:
+      - key: DATA_FILE
+        value: /var/data/data.json
+      - key: ADMIN_USER
+        value: superadmin
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: TZ
+        value: Asia/Jakarta
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 1

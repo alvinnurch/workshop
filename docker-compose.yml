@@ -1,0 +1,12 @@
+services:
+  workshop:
+    build: .
+    container_name: ruang-workshop
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_FILE: /data/data.json
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./data:/data

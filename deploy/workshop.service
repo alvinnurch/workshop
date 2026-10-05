@@ -1,0 +1,16 @@
+[Unit]
+Description=Ruang Workshop islami.co
+After=network.target
+
+[Service]
+Type=simple
+User=workshop
+WorkingDirectory=/opt/ruang-workshop
+EnvironmentFile=/opt/ruang-workshop/.env
+Environment=TZ=Asia/Jakarta
+ExecStart=/usr/bin/node /opt/ruang-workshop/server.js
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
